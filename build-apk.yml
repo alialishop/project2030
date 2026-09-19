@@ -1,0 +1,437 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: "Application name"
+        required: true
+        type: string
+
+      website_url:
+        description: "Website URL"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Gradle
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          unzip -q gradle-8.7-bin.zip -d "$HOME"
+          echo "$HOME/gradle-8.7/bin" >> "$GITHUB_PATH"
+          gradle --version
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Generate Android project
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          WEBSITE_URL: ${{ inputs.website_url }}
+        run: |
+
+          set -e
+
+          rm -rf android
+
+          mkdir -p android
+          mkdir -p android/app/src/main/java/com/project2030/webapp
+          mkdir -p android/app/src/main/res/values
+
+          cat > android/settings.gradle <<'EOF'
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "Project2030APK"
+include(":app")
+EOF
+
+          cat > android/build.gradle <<'EOF'
+plugins {
+    id 'com.android.application' version '8.6.1' apply false
+}
+EOF
+
+          cat > android/gradle.properties <<'EOF'
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+EOF
+
+          cat > android/app/build.gradle <<'EOF'
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.project2030.webapp'
+
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.project2030.webapp'
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.webkit:webkit:1.12.1'
+}
+EOF
+
+          mkdir -p android/app/src/main/res/values
+
+          python3 <<'PY'
+          import os
+          import html
+
+          app_name = os.environ.get("APP_NAME", "Project2030")
+          website = os.environ.get(
+              "WEBSITE_URL",
+              "https://alialishop.github.io/project2030/"
+          )
+
+          with open(
+              "android/app/src/main/res/values/strings.xml",
+              "w",
+              encoding="utf-8"
+          ) as f:
+
+              f.write("""<?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">{}</string>
+              <string name="website_url">{}</string>
+          </resources>
+          """.format(
+                  html.escape(app_name),
+                  html.escape(website)
+              ))
+          PY
+
+          cat > android/app/src/main/res/values/themes.xml <<'EOF'
+<resources>
+
+    <style
+        name="AppTheme"
+        parent="Theme.AppCompat.Light.NoActionBar">
+
+        <item name="android:fontFamily">sans</item>
+
+        <item name="android:colorAccent">#FFD400</item>
+
+        <item name="android:navigationBarColor">#000000</item>
+
+        <item name="android:statusBarColor">#FFFFFF</item>
+
+        <item name="android:windowLightStatusBar">true</item>
+
+    </style>
+
+</resources>
+EOF
+
+          cat > android/app/src/main/AndroidManifest.xml <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission
+        android:name="android.permission.INTERNET"/>
+
+    <application
+        android:allowBackup="true"
+        android:usesCleartextTraffic="false"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+
+            <intent-filter>
+
+                <action
+                    android:name="android.intent.action.MAIN"/>
+
+                <category
+                    android:name="android.intent.category.LAUNCHER"/>
+
+            </intent-filter>
+
+        </activity>
+
+    </application>
+
+</manifest>
+EOF
+
+          cat > android/app/src/main/java/com/project2030/webapp/MainActivity.java <<'EOF'
+package com.project2030.webapp;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.content.Intent;
+import android.net.Uri;
+
+public class MainActivity extends Activity {
+
+    private WebView webView;
+
+    private ValueCallback<Uri[]> fileCallback;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+
+        super.onCreate(savedInstanceState);
+
+        webView = new WebView(this);
+
+        setContentView(webView);
+
+        WebSettings settings =
+                webView.getSettings();
+
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+
+        settings.setAllowFileAccess(true);
+        settings.setAllowContentAccess(true);
+
+        settings.setSupportZoom(false);
+        settings.setBuiltInZoomControls(false);
+        settings.setDisplayZoomControls(false);
+
+        webView.setWebViewClient(
+            new WebViewClient() {
+
+                @Override
+                public boolean shouldOverrideUrlLoading(
+                        WebView view,
+                        WebResourceRequest request) {
+
+                    Uri uri = request.getUrl();
+
+                    String scheme = uri.getScheme();
+
+                    if ("http".equalsIgnoreCase(scheme)
+                            || "https".equalsIgnoreCase(scheme)) {
+
+                        return false;
+                    }
+
+                    try {
+
+                        Intent intent =
+                                new Intent(
+                                        Intent.ACTION_VIEW,
+                                        uri
+                                );
+
+                        startActivity(intent);
+
+                    } catch (Exception ignored) {}
+
+                    return true;
+                }
+            }
+        );
+
+        webView.setWebChromeClient(
+            new WebChromeClient() {
+
+                @Override
+                public boolean onShowFileChooser(
+                        WebView webView,
+                        ValueCallback<Uri[]> callback,
+                        FileChooserParams params) {
+
+                    if (fileCallback != null) {
+                        fileCallback.onReceiveValue(null);
+                    }
+
+                    fileCallback = callback;
+
+                    Intent intent =
+                            params.createIntent();
+
+                    try {
+
+                        startActivityForResult(
+                                intent,
+                                1001
+                        );
+
+                    } catch (Exception e) {
+
+                        fileCallback = null;
+
+                        return false;
+                    }
+
+                    return true;
+                }
+            }
+        );
+
+        webView.loadUrl(
+                getString(R.string.website_url)
+        );
+    }
+
+    @Override
+    protected void onActivityResult(
+            int requestCode,
+            int resultCode,
+            Intent data) {
+
+        if (requestCode == 1001) {
+
+            if (fileCallback != null) {
+
+                Uri[] result = null;
+
+                if (resultCode == RESULT_OK
+                        && data != null) {
+
+                    if (data.getData() != null) {
+
+                        result = new Uri[]{
+                                data.getData()
+                        };
+
+                    } else if (data.getClipData() != null) {
+
+                        int count =
+                                data.getClipData()
+                                        .getItemCount();
+
+                        result = new Uri[count];
+
+                        for (int i = 0; i < count; i++) {
+
+                            result[i] =
+                                    data.getClipData()
+                                            .getItemAt(i)
+                                            .getUri();
+                        }
+                    }
+                }
+
+                fileCallback.onReceiveValue(result);
+
+                fileCallback = null;
+            }
+        }
+
+        super.onActivityResult(
+                requestCode,
+                resultCode,
+                data
+        );
+    }
+
+    @Override
+    public void onBackPressed() {
+
+        if (webView.canGoBack()) {
+
+            webView.goBack();
+
+        } else {
+
+            super.onBackPressed();
+        }
+    }
+}
+EOF
+
+      - name: Create Gradle wrapper
+        working-directory: android
+        run: |
+          gradle wrapper --gradle-version 8.7
+          chmod +x gradlew
+
+      - name: Build Debug APK
+        working-directory: android
+        run: |
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: |
+          mkdir -p output
+
+          cp \
+            android/app/build/outputs/apk/debug/app-debug.apk \
+            "output/${{ inputs.app_name }}.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: project2030-apk
+          path: output/*.apk
+          retention-days: 7
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_NAME: ${{ inputs.app_name }}
+        run: |
+
+          TAG="apk-${GITHUB_RUN_NUMBER}"
+
+          gh release create "$TAG" \
+            output/*.apk \
+            --title "${APP_NAME} APK" \
+            --notes "APK generated automatically by Project2030 APK Builder."
